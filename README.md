@@ -40,29 +40,34 @@ argus/
 flowchart TD
     %% External Actors & APIs
     Client([Client / Attacker Traffic])
-    GeminiAPI[("External Gemini API\n(Google GenAI SDK)")]
+    GroqAPI[("External Groq API\n(OpenAI-compatible Chat API)")]
 
     %% Subgraph: Proxy Package
     subgraph ProxyPkg ["package proxy"]
-        Router["router.go\n(httputil.ReverseProxy :8080)"]
-        Inspector["inspector.go\n(Canary Traps & WAF Signatures)"]
+        Router["Gateway Router\n(entrypoint + routing)"]
+        ThreatEngine["Threat Engine\n(resolve, inspect, score)"]
+        ThreatInspector["Threat Inspector\n(canaries + signatures)"]
+        IPTracker["IP Threat Tracker\n(threshold + trap state)"]
+        IPResolver["Client IP Resolver\n(peer / XFF trust)"]
     end
 
     %% Subgraph: Cache Package
     subgraph CachePkg ["package cache"]
-        MemoryCache[("memory.go\n(IP Threat Scores & MD5 Payload Cache)")]
-        SessionCache[("session.go\n(Attacker Context Ring Buffer)")]
+        ResponseCache[("Response Cache\n(replay synthetic replies)")]
+        SessionCache[("Session Memory Cache\n(attacker interaction history)")]
     end
 
     %% Subgraph: Honeypot Package
     subgraph HoneypotPkg ["package honeypot"]
-        AIEngine["ai.go\n(Async Gemini Client)"]
-        PromptEng["prompt.go\n(Persona Prompts & Response Stripper)"]
+        HoneypotHandler["Honeypot Response Handler\n(session + cache orchestration)"]
+        AIEngine["AI Response Engine\n(LLM call + normalization)"]
+        Prompting["Prompt Builder\n(stack-aware prompts)"]
+        Fallback["Fallback Response Builder\n(static safe responses)"]
     end
 
     %% Subgraph: App Package
     subgraph AppPkg ["package app"]
-        RealApp["server.go\n(Legitimate App Target :8081)"]
+        RealApp["Target Application\n(legitimate backend)"]
     end
 
     %% Subgraph: UI Package (Optional)
@@ -71,22 +76,31 @@ flowchart TD
         Dashboard["dashboard.go\n(rivo/tview 3-Pane Terminal UI)"]
     end
 
+    Reject["Safety Rejection\n(400 / 413 / 415)"]
+
     %% Execution Flow
     Client -->|"1. HTTP Request"| Router
-    Router -->|"2. Inspect Request"| Inspector
-    Inspector <-->|"3. Lookup/Update IP Score"| MemoryCache
+    Router -->|"2. Resolve + Inspect + Score"| ThreatEngine
+    ThreatEngine --> ThreatInspector
+    ThreatEngine --> IPTracker
+    ThreatEngine --> IPResolver
 
     %% Routing Decisions
-    Inspector -->|"4a. Score < 50 (Legitimate)"| RealApp
-    Inspector -->|"4b. Score >= 50 or Canary (Malicious)"| AIEngine
+    Router -->|"3a. Clean / below threshold"| RealApp
+    Router -->|"3b. Trapped IP"| HoneypotHandler
+    Router -->|"3c. Uninspectable body"| Reject
 
     %% Honeypot Pipeline
-    AIEngine <-->|"5a. Check MD5 Cache"| MemoryCache
-    AIEngine <-->|"5b. Fetch/Update Session Context"| SessionCache
-    AIEngine -->|"6. Format Context"| PromptEng
-    PromptEng -->|"7. Query LLM"| GeminiAPI
-    GeminiAPI -->|"8. Synthetic Response"| Router
-    Router -->|"9. Stream Decoy Payload"| Client
+    HoneypotHandler -->|"4a. Session context"| SessionCache
+    HoneypotHandler -->|"4b. Cache lookup/store"| ResponseCache
+    HoneypotHandler -->|"4c. Generate synthetic response"| AIEngine
+    AIEngine --> Prompting
+    AIEngine --> GroqAPI
+    AIEngine -->|"error path"| Fallback
+
+    RealApp -->|"5. Legitimate response"| Client
+    HoneypotHandler -->|"5. Deceptive response"| Client
+    Reject -->|"5. Reject response"| Client
 
     %% Async Telemetry Stream (Optional)
     Router -.->|"Async Event"| EventBus
@@ -94,11 +108,12 @@ flowchart TD
 
     %% Styling - Dark Mode & High Contrast Safe
     style Client fill:#2d3748,stroke:#cbd5e0,color:#ffffff,stroke-width:2px
-    style GeminiAPI fill:#1e3a8a,stroke:#60a5fa,color:#ffffff,stroke-width:2px
+    style GroqAPI fill:#1e3a8a,stroke:#60a5fa,color:#ffffff,stroke-width:2px
     style RealApp fill:#064e3b,stroke:#34d399,color:#ffffff,stroke-width:2px
-    
+
     %% Optional Component Styling
     style UIPkg fill:#1e1b4b,stroke:#818cf8,color:#ffffff,stroke-width:2px,stroke-dasharray: 5 5
     style Dashboard fill:#431407,stroke:#fb923c,color:#ffffff,stroke-width:1px,stroke-dasharray: 3 3
     style EventBus fill:#431407,stroke:#fb923c,color:#ffffff,stroke-width:1px,stroke-dasharray: 3 3
 ```
+
